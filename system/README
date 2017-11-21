@@ -1,0 +1,54 @@
+Install destinations of system files in this directory:
+**** PLEASE ADD NEW ENTRIES TO THE END OF THIS FILE ****
+
+64-md-raid.rules	: /lib/udev/rules.d/
+85-lvm2.rules		: /lib/udev/rules.d/
+modprobe.d.nbd.conf	: /etc/modprobe.d/
+hostname.sh : /etc/init.d/
+loaded_module_info.sh : /usr/local/bin
+rc.local : /etc/
+CPOOL			: /usr/lib/ocf/resource.d/heartbeat/
+ADS			: /usr/lib/ocf/resource.d/heartbeat/
+atl-nfsserver		: /usr/lib/ocf/resource.d/heartbeat/
+dedup-filesystem	: /usr/lib/ocf/resource.d/heartbeat/
+atl-vscaler		: /usr/lib/ocf/resource.d/heartbeat/
+atl-SCSTTarget	: /usr/lib/ocf/resource.d/heartbeat/
+atl-SCSTLun		: /usr/lib/ocf/resource.d/heartbeat/
+nfsserver		: /usr/lib/ocf/resource.d/heartbeat/
+CPUCollector.conf     : /etc/diamond/collectors/
+DiskSpaceCollector.conf : /etc/diamond/collectors/
+DiskUsageCollector.conf : /etc/diamond/collectors/
+LoadAverageCollector.conf : /etc/diamond/collectors/
+MemoryCollector.conf  : /etc/diamond/collectors/
+SockstatCollector.conf : /etc/diamond/collectors/
+VMStatCollector.conf : /etc/diamond/collectors/  
+NetworkThroughputCollector.conf : /etc/diamond/collectors/  
+OffloadCollector.conf : /etc/diamond/collectors/
+VolumeCapacityCollector.conf : /etc/diamond/collectors/  
+VolumeIOPSOffloadCollector.conf : /etc/diamond/collectors/  
+VolumeCapOffloadCollector.conf : /etc/diamond/collectors/  
+IOLatencyCollector.conf : /etc/diamond/collectors/
+ADSCapacityGridCollector.conf : /etc/diamond/collectors/
+ADSCapOffloadGridCollector.conf : /etc/diamond/collectors/
+ILIOAvailabilityStatusCollector.conf : /etc/diamond/collectors/ 
+ReachableStatusCollector.conf : /etc/diamond/collectors/
+FileSystemStatusCollector.conf : /etc/diamond/collectors/
+VMsCollector.conf     : /etc/diamond/collectors/
+diamondcfgsetup.pyc : /usr/local/bin/
+change_password.sh : /usr/local/bin/
+50-default-rsyslog.conf : /etc/rsyslog.d/50-default.conf
+logrotate-all : /etc/logrotate.d/all
+rsyslog.conf : /etc/rsyslog.conf
+diamond.conf : /etc/diamond/
+usx.txt : /etc/ilio/
+findif.sh : /usr/lib/ocf/lib/heartbeat/
+IPaddr2 : /usr/lib/ocf/resource.d/heartbeat/
+10_linux : /etc/grub.d/
+progress_dot_on.png : /lib/plymouth/themes/ubuntu-logo/
+progress_dot_on16.png : /lib/plymouth/themes/ubuntu-logo/
+ubuntu-logo.script : /lib/plymouth/themes/ubuntu-logo/
+ubuntu_logo.png : /lib/plymouth/themes/ubuntu-logo/
+ubuntu_logo16.png : /lib/plymouth/themes/ubuntu-logo/
+corosync : /etc/init.d/
+
+

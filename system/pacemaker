@@ -1,0 +1,8 @@
+/var/log/pacemaker.log {
+    daily
+    copytruncate
+    rotate 10
+    compress
+    notifempty
+    size 5120k
+}

@@ -1,0 +1,332 @@
+#!/bin/sh
+#
+#
+#	Dummy OCF RA. Does nothing but wait a few seconds, can be
+#	configured to fail occassionally.
+#
+# Copyright (c) 2004 SUSE LINUX AG, Lars Marowsky-Br�e
+#                    All Rights Reserved.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of version 2 of the GNU General Public License as
+# published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it would be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+#
+# Further, this software is distributed without any warranty that it is
+# free of the rightful claim of any third person regarding infringement
+# or the like.  Any license provided herein, whether implied or
+# otherwise, applies only to this software file.  Patent licenses, if
+# any, provided herein do not apply to combinations of this program with
+# other software, or any other product whatsoever.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write the Free Software Foundation,
+# Inc., 59 Temple Place - Suite 330, Boston MA 02111-1307, USA.
+#
+
+#######################################################################
+# Initialization:
+
+: ${OCF_FUNCTIONS_DIR=${OCF_ROOT}/lib/heartbeat}
+. ${OCF_FUNCTIONS_DIR}/ocf-shellfuncs
+
+#######################################################################
+
+meta_data() {
+	cat <<END
+<?xml version="1.0"?>
+<!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
+<resource-agent name="atl-vscaler">
+<version>1.0</version>
+
+<longdesc lang="en">
+atl-vscaler helps one to manage the vscaler as a failover-able resource in Linux-HA.
+</longdesc>
+<shortdesc lang="en">Managers vscaler failover</shortdesc>
+
+<parameters>
+
+<parameter name="cache_dev" unique="0" required="1">
+<longdesc lang="en">
+Name of the cache device to be used to setup vscaler
+</longdesc>
+<shortdesc lang="en">cache device to be used to setup vscaler</shortdesc>
+<content type="string"/>
+</parameter>
+<parameter name="mode" unique="0" required="1">
+<longdesc lang="en">
+Mode of the vscaler cache device. Currently, it can be back or thru
+</longdesc>
+<shortdesc lang="en">Mode of the vscaler cache device</shortdesc>
+<content type="string"/>
+</parameter>
+
+</parameters>
+
+<actions>
+<action name="start"        timeout="20" />
+<action name="stop"         timeout="20" />
+<action name="monitor"      timeout="20" interval="10" depth="0" />
+<action name="reload"       timeout="20" />
+<action name="migrate_to"   timeout="20" />
+<action name="migrate_from" timeout="20" />
+<action name="meta-data"    timeout="5" />
+<action name="validate-all"   timeout="20" />
+</actions>
+</resource-agent>
+END
+}
+
+#######################################################################
+VSCALER_LOAD_CMD="/opt/milio/scripts/vscaler_load"
+VSCALER_CREATE_CMD="/opt/milio/scripts/vscaler_create "
+VSCALER_DESTROY_CMD="/opt/milio/scripts/vscaler_destroy -f "
+VSCALER_CFG_FILE="/etc/ilio/mnttab"
+DELIMITER="}}##0##{{"
+
+#JIRA Ticket: ATLANTIS2923/ATLANTIS-2926
+#Keys for vscaler kernel parameter tunables
+VSCALER_DIRTY_THRESH_PCT="dirty_thresh_pct"
+VSCALER_MAX_CLEAN_IOS_SET="max_clean_ios_set"
+VSCALER_MAX_CLEAN_IOS_TOTAL="max_clean_ios_total"
+VSCALER_RECLAIM_POLICY="reclaim_policy"
+
+#JIRA Ticket: ATLANTIS2923/ATLANTIS-2926
+#Values for vscaler kernel parameter tunables
+VSCALER_DIRTY_THRESH_PCT_VALUE="80"
+VSCALER_MAX_CLEAN_IOS_SET_VALUE="65536"
+VSCALER_MAX_CLEAN_IOS_TOTAL_VALUE="65536"
+VSCALER_RECLAIM_POLICY_VALUE="1"
+
+vscaler_dev_md_name=""
+#####################################################################
+# Gets the name of vscaler device used to create a Hybrid USX Volume
+# JIRA Ticket: ATLANTIS-2923/ATLANTIS-2926
+# Globals:
+# Arguments:
+#   None
+# Returns:
+#   0			:   success, also sets the value of 
+# 			    vscaler_dev_name to the vscaler dev name
+#   1		        :   error
+#
+#####################################################################
+get_vscaler_dev_name() {
+        #proc directory where vscaler tunables are present
+        vscaler_proc_dir="/proc/sys/dev/vscaler/"
+        #Just in case the vscaler device has not started
+        if [ ! -d ${vscaler_proc_dir} ];then
+		ocf_log debug "There is no vscaler device on this appliance right now."
+                return 1
+        fi
+        #Get the vscaler device's md name
+        vscaler_dev_md_name=`ls ${vscaler_proc_dir}`
+#	echo ${vscaler_dev_name}
+	return 0
+}
+
+#####################################################################
+# Tunes the specified kernel configuration parameter for vscaler
+# device
+# JIRA Ticket: ATLANTIS-2923/ATLANTIS-2926
+# Globals:
+# Arguments:
+#    vscaler_dev_name    :   name of the vscaler device to be tuned
+#    key                 :   name of the parameter to be tuned
+#    value               :   value to be set for this parameter
+# Returns:
+#    0                   :   success
+#    1                   :   failure
+#####################################################################
+tune_vscaler_kernel_parameter() {
+	if [ $# -ne 3 ]
+	then
+		ocf_log debug "usage: tune_vscaler_kernel_parameter vscaler_dev_name kernel_tunable_key value_for_the_key"
+		return 1
+	fi
+	#sysctl is used with -e switch, so that any errors about key 
+	#not being present will be ignored. E.g: vscaler set in write 
+	#through mode will not have some of the tunables that we want
+	#to tweak for write back mode.
+	cmd="sysctl -e dev.vscaler.$1.$2=$3"
+	ocf_log debug "Running $cmd"
+	`${cmd}`
+	ret=$?
+	ocf_log debug "Return Code: " $ret
+	return $ret
+}
+
+#######################################################################
+
+vscaler_usage() {
+	cat <<END
+usage: $0 {start|stop|monitor|validate-all|meta-data}
+
+Expects to have a fully populated OCF RA-compliant environment set.
+END
+}
+
+vscaler_start() {
+
+    echo "touch ${OCF_RESOURCE_INSTANCE} now"
+    ocf_log debug "create ha_pseudo_resource ${OCF_RESOURCE_INSTANCE} now"
+    ha_pseudo_resource ${OCF_RESOURCE_INSTANCE} start
+    rc=$?
+    if [ $rc -ne 0 ]; then
+        ocf_log err "Failed to run the ha_pseudo_resource ${OCF_RESOURCE_INSTANCE} start for vscaler"
+        return $rc
+    fi
+
+    ret=1
+    ocf_log debug "fgrep $DELIMITER$OCF_RESKEY_cache_dev$DELIMITER $VSCALER_CFG_FILE"
+    line=`fgrep $DELIMITER$OCF_RESKEY_cache_dev$DELIMITER $VSCALER_CFG_FILE`
+    ret=$?
+    if [ $ret = 0 ]; then
+	ocf_log debug "Stage 1. fgrep succeeded"
+    	ssd_dev=`echo $line | awk -F"$DELIMITER" '{print $2}'`
+    	disk_dev=`echo $line | awk -F"$DELIMITER" '{print $1}'`
+	#Try the load command first, if it fails do vscaler_create
+    	dmsetup table $OCF_RESKEY_cache_dev | grep $disk_dev
+    	ret=$?
+    	if [ $ret != 0 ]; then
+		ocf_log debug "Stage 2. dmsetup table returned failure, OK"
+		ocf_log debug "Attempting vscaler load"
+    		ocf_log debug "$VSCALER_LOAD_CMD $ssd_dev $OCF_RESKEY_cache_dev"
+		$VSCALER_LOAD_CMD $ssd_dev $OCF_RESKEY_cache_dev
+		ret=$?
+		if [ $ret != 0 ]; then
+			ocf_log debug "Stage 3. VSCALER_LOAD command failed, attempt VSCALER_CREATE"
+			VSCALER_CREATE_CMD="$VSCALER_CREATE_CMD -p $OCF_RESKEY_mode"
+    			ocf_log debug "$VSCALER_CREATE_CMD $OCF_RESKEY_cache_dev $ssd_dev $disk_dev"
+			$VSCALER_CREATE_CMD $OCF_RESKEY_cache_dev $ssd_dev $disk_dev
+			ret=$?
+			if [ $ret != 0 ]; then
+				ocf_log debug "Stage 4. VSCALER_CREATE command first try failed, invoking VSCALER_DESTROY first"
+				ocf_log debug "Stage 4. $VSCALER_DESTROY_CMD $ssd_dev"
+				$VSCALER_DESTROY_CMD $ssd_dev
+				ret=$?
+				if [ $ret = 0 ]; then
+					ocf_log debug "Stage 5. VSCALER_DESTROY command succeeded, attempt VSCALER_CREATE second try"
+				else
+					ocf_log debug "Stage 5. VSCALER_DESTROY command failed, attempt VSCALER_CREATE second try nevertheless!"
+				fi
+    				ocf_log debug "$VSCALER_CREATE_CMD $OCF_RESKEY_cache_dev $ssd_dev $disk_dev"
+				$VSCALER_CREATE_CMD $OCF_RESKEY_cache_dev $ssd_dev $disk_dev
+				ret=$?
+			fi		
+		else
+			ocf_log debug "vscaler successfuly loaded, no create needed"
+		fi
+	else
+		ocf_log debug "Stage 2. dmsetup table returned success, OK"
+    	fi
+    	if [ $ret != 0 ];  then
+		ocf_log debug "Stage 5. Vscaler create command failed !"
+		return $OCF_ERR_CONFIGURED
+    	fi
+        # JIRA Ticket: ATLANTIS-2923/ATLANTIS-2926
+        ocf_log debug "Need to get the vscaler device's md name, in order to set kernel tunable parameters"
+        get_vscaler_dev_name
+	ocf_log debug "vscaler device md name is: " $vscaler_dev_md_name
+	if [ ! -z $vscaler_dev_md_name ]; then
+		ocf_log debug "Setting vscaler kernel tunables now"
+                tune_vscaler_kernel_parameter $vscaler_dev_md_name $VSCALER_DIRTY_THRESH_PCT $VSCALER_DIRTY_THRESH_PCT_VALUE
+                tune_vscaler_kernel_parameter $vscaler_dev_md_name $VSCALER_MAX_CLEAN_IOS_SET $VSCALER_MAX_CLEAN_IOS_SET_VALUE 
+                tune_vscaler_kernel_parameter $vscaler_dev_md_name $VSCALER_MAX_CLEAN_IOS_TOTAL $VSCALER_MAX_CLEAN_IOS_TOTAL_VALUE
+                tune_vscaler_kernel_parameter $vscaler_dev_md_name $VSCALER_RECLAIM_POLICY $VSCALER_RECLAIM_POLICY_VALUE
+	fi
+    else
+	ocf_log debug "Stage 1. fgrep failed !"
+    fi
+    return $OCF_SUCCESS
+}
+
+vscaler_stop() {
+    ocf_log info "Not stop vscaler"
+    return $OCF_ERR_GENERIC
+    	
+	if [ -f "/tmp/ha_disable" ]; then
+		return $OCF_SUCCESS
+	fi
+
+    ret=1
+    dmsetup remove $OCF_RESKEY_cache_dev
+    ret=$?
+    if [ $ret = 0 ]; then
+	ocf_log debug "vscaler_stop returns success"
+    else
+	ocf_log debug "vscaler_stop returns failure"
+    fi
+
+    # ignore if the ha_pseudo_resource stop failed
+    echo "rm ${OCF_RESOURCE_INSTANCE} now"
+    ha_pseudo_resource "${OCF_RESOURCE_INSTANCE}" stop
+    pseudo_rc=$?
+    ocf_log debug "stop ha_pseudo_resource ${OCF_RESOURCE_INSTANCE} return $pseudo_rc"
+
+    return $OCF_SUCCESS
+}
+
+vscaler_monitor() {
+
+    echo "check whether ${OCF_RESOURCE_INSTANCE} exits now"
+    ocf_log debug "check whether ha_pseudo_resource ${OCF_RESOURCE_INSTANCE} exits now"
+    ha_pseudo_resource $OCF_RESOURCE_INSTANCE monitor
+    rc=$?
+    if [ $rc -ne $OCF_SUCCESS ]; then
+            echo "ha_pseudo_resource $OCF_RESOURCE_INSTANCE not exist"
+            return $rc
+    fi
+
+    ret=1
+    line=`fgrep $DELIMITER$OCF_RESKEY_cache_dev$DELIMITER $VSCALER_CFG_FILE`
+    ret=$?
+    if [ $ret = 0 ]; then
+    	ssd_dev=`echo $line | awk -F"$DELIMITER" '{print $2}'`
+    	disk_dev=`echo $line | awk -F"$DELIMITER" '{print $1}'`
+    	ocf_log debug "$OCF_RESKEY_cache_dev $ssd_dev $disk_dev "
+    	dmsetup table $OCF_RESKEY_cache_dev | grep $disk_dev
+    	ret=$?
+    	if [ $ret = 0 ]; then
+		ocf_log debug "vscaler_monitor returns success"
+		return $OCF_SUCCESS
+    	else
+		ocf_log debug "vscaler_monitor returns failure"
+		return $OCF_NOT_RUNNING
+    	fi
+    fi
+    return $OCF_NOT_RUNNING
+}
+
+vscaler_validate() {
+    ret=1
+    line=`fgrep $DELIMITER$OCF_RESKEY_cache_dev$DELIMITER $VSCALER_CFG_FILE`
+    ret=$?
+    if [ $ret != 0 ]; then
+	return $OCF_ERR_ARGS
+    fi
+    return $OCF_SUCCESS
+}
+
+case $__OCF_ACTION in
+meta-data)	meta_data
+		exit $OCF_SUCCESS
+		;;
+start)		vscaler_start;;
+stop)		vscaler_stop;;
+monitor)	vscaler_monitor;;
+validate-all)	vscaler_validate;;
+usage|help)	vscaler_usage
+		exit $OCF_SUCCESS
+		;;
+*)		vscaler_usage
+		exit $OCF_ERR_UNIMPLEMENTED
+		;;
+esac
+rc=$?
+ocf_log debug "${OCF_RESOURCE_INSTANCE} $__OCF_ACTION : $rc"
+exit $rc
+

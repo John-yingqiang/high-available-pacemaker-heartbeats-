@@ -1,0 +1,27 @@
+#! /bin/bash
+### BEGIN INIT INFO
+# Provides:          netdata
+# Short-Description: start the netdata services
+### END INIT INFO
+
+# Carry out specific functions when asked to by the system
+case "$1" in
+    start)
+        echo "Starting Netdata Services"
+	/opt/netdata/bin/netdata-start.sh	
+        ;;
+    stop)
+       	echo "Stopping Netdata Services"
+	/opt/netdata/bin/netdata-stop.sh	
+        ;;
+    restart)
+        stop
+        sleep 2
+        start
+        ;;
+    *)
+        echo "Usage: /etc/init.d/netdata {start|stop|restart}"
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,145 @@
+#!/bin/sh
+
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games
+RC_LOCAL_RUN="/tmp/rc_local_run"
+RC_LOCAL_RUNNING_ID="/tmp/rc_lcoal_running_id"
+
+# Fix for USX-53809:Some Simple Hybrid bootstrap twice during deployment
+echo "Check rc.local process running info:"
+echo ".................................."
+date
+ps -ef | grep "rc.local" | grep -v grep
+echo ".................................."
+if [ -f $RC_LOCAL_RUN ]; then
+	echo "rc.local has already been called, ignore this time."
+	exit 0
+fi
+touch $RC_LOCAL_RUN
+
+#echo "performing depmod"
+#depmod -a
+echo "Our tty is `tty`"
+
+# network optimizations
+e="0"
+while [ $e -lt 4 ]
+do
+  ethtool -K eth$e tso off gso off;
+  ethtool -G eth$e tx 4096;
+  ethtool -G eth$e rx 4096;
+  ifconfig eth$e txqueuelen 300000;
+  e=`expr $e + 1`
+done
+
+echo "Silencing kernel console logging"
+echo "1 1 1 1" > /proc/sys/kernel/printk
+hypervisor=`dmidecode -s system-manufacturer`
+if [ -z "$hypervisor" ]; then
+    if [ -e '/dev/xvda' ]; then
+        hypervisor="Xen"
+    fi
+fi
+if echo "$hypervisor" | grep -q "Xen"; then
+	for disk in /dev/xvd[a-z]
+	do
+	    disk=`basename $disk`
+	    
+	    # Stick it in /sys/class/block
+	    echo deadline > /sys/class/block/$disk/queue/scheduler
+	    echo 4096 > /sys/class/block/$disk/queue/nr_requests
+
+	    # Also stick it /sys/block
+	    echo deadline > /sys/block/$disk/queue/scheduler
+	    echo 4096 > /sys/block/$disk/queue/nr_requests
+	    echo 2048 > /sys/block/$disk/queue/max_sectors_kb
+	    echo 0 > /sys/class/block/${disk}/queue/rq_affinity
+	    #blockdev --setra 536870912 /dev/${disk}
+
+	    # Change made 14-Feb-2014
+	    blockdev --setra 65536 /dev/${disk}
+	done
+else
+	for disk in /dev/sd[a-z]
+	do
+	    disk=`basename $disk`
+	    
+	    # Stick it in /sys/class/block
+	    echo deadline > /sys/class/block/$disk/queue/scheduler
+	    echo 4096 > /sys/class/block/$disk/queue/nr_requests
+
+	    # Also stick it /sys/block
+	    echo deadline > /sys/block/$disk/queue/scheduler
+	    echo 4096 > /sys/block/$disk/queue/nr_requests
+	    echo 2048 > /sys/block/$disk/queue/max_sectors_kb
+
+	    # Changes made July 05, 2013 
+	    echo 0 > /sys/block/${disk}/queue/rq_affinity
+	    echo 0 > /sys/class/block/${disk}/queue/rq_affinity
+	    #blockdev --setra 536870912 /dev/${disk}
+
+	    # Change made 14-Feb-2014
+	    blockdev --setra 65536 /dev/${disk}
+	done
+fi
+
+# Set USX Node to sync its time from the hypervisor
+# Below line for VMWare
+if echo "$hypervisor" | grep -q "VMware"; then
+    /usr/sbin/vmware-guestd --cmd "vmx.set_option synctime 0 1" || /usr/sbin/vmware-guestd --cmd "vmx.set_option synctime 1 1"
+fi
+
+# TISILIO-3391 : Set corosync stop script to run after teardownatlantisdatastore
+# corosync should be started and stopped by ha script
+update-rc.d -f corosync-notifyd remove
+update-rc.d -f corosync remove
+#update-rc.d corosync-notifyd stop 2 0 1 6 . start 19 2 3 4 5 .
+#update-rc.d corosync stop 2 0 1 6 . start 19 2 3 4 5 .
+
+# Disable CPU soft lockup detection - TISILIO-2150
+# See the "watchdog_thresh" section in https://www.kernel.org/doc/Documentation/sysctl/kernel.txt
+echo 0 > /proc/sys/kernel/watchdog_thresh
+
+/bin/ps -ef | grep -w 'watchdog' | grep -v 'grep'
+if [ $? -eq 1 ]; then
+	echo 10 > /proc/sys/kernel/watchdog_thresh
+	sleep 1
+	echo 0 > /proc/sys/kernel/watchdog_thresh
+fi
+
+# Change tty to tty1 so that we get our milio splash messages on screen
+chvt 1
+
+# Enable debug options.
+. /opt/milio/scripts/enable_debug.sh
+
+# reserve /dev/ibd0
+/bin/mknod /dev/ibd0 b 44 0
+
+#copy ibdmanager when machine reboot for upgrade only 
+IBD_MANAGER=/usr/local/bin/ibdmanager
+[ -e ${IBD_MANAGER}.new ] && cp -f ${IBD_MANAGER}.new ${IBD_MANAGER}
+IBD_SERVER=/usr/local/bin/ibdserver
+[ -e ${IBD_SERVER}.new ] && cp -f ${IBD_SERVER}.new ${IBD_SERVER}
+IBD_AGENT=/usr/local/sbin/ibdagent
+[ -e ${IBD_AGENT}.new ] && cp -f ${IBD_AGENT}.new ${IBD_AGENT}
+
+splash.sh "Configuring USX Node, please wait..."
+
+#configure USX Node automatically
+python /opt/milio/scripts/cfgilioenv.pyc >/var/log/usx-cfgilioenv-console.log 2>&1
+RETVAL=$?
+# For Hyper-V, comment out above section from splash.sh and uncomment this command
+# /opt/milio/scripts/hv_snap_restore.sh
+
+# Diamond config file setup
+python /usr/local/bin/diamondcfgsetup.pyc
+
+# Restart diamond service
+service diamond restart
+
+# Start Monit
+/etc/init.d/monit start
+
+# for smbd
+[ -f /var/log/samba/log.smbd ] && service smbd restart > /dev/null 2>&1
+#Further splash messages will be displayed by the corresponding bootstrap scripts

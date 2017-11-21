@@ -1,0 +1,371 @@
+#!/usr/bin/python
+
+'''
+Author: Carrick Xia(carrickx@atlantiscomputing.com)
+
+The script will report the health status of this Volume.
+
+Health status include:
+    1. Volume volume name, uuid, volume vm uptime, volume volume uptime;
+    2. USX Manager status;
+    2. Shared IP status;
+    3. NFS/iSCSI daemon working status
+    4. Dedupfs mounted, dedupfs utilization;
+    5. LVM thin pool utilization;
+    6. MD raid working status
+    7. IBD connection status;
+    8. pstree, ps -alx, top -n 1, dmesg
+
+For each Service VM used by the Volumem, health status include:
+    1. Service VM name, IP, connectivity;
+    2. Uptime;
+    3. IBD connection status;
+    4. CPU and Memory usage;
+    5. pstree, ps -alx, top -n 1, dmesg
+
+For HA Enabled Volume, HA Status include:
+    1. crm_mon -r1;
+    2. corosync-quorumtool;
+
+Usage:
+    with "-v", will report all the full status list, otherwise will report the basic list.
+
+'''
+
+#Output
+'''
+
+NODE_NAME                     : tis33AA-VOLUME-Testbed825-002
+NODE_UUID                     : USX_c5d98fad-2b83-304a-83cc-7508cf1de2a0
+HA_STATUS                     : True
+ROLE                          : RESOURCE_CONTAINER
+NODE_UPTIME                   : 01:07:24 up 2 days,  1:16,  2 users,  load average: 1.31, 1.23, 1.23
+USX_MANAGER_STATUS            : OK
+IS_STARTING_VOLUME_NOW        : NO
+VOLUME_NAME                   : tis33AA-HYBRID-Testbed825-1473042860
+VOLUME_TYPE                   : HYBRID
+VOLUME_MOUNT_POINT            : /exports/tis33AA-HYBRID-Testbed825-1473042860
+VOLUME_SIZE                   : 30G
+VOLUME_USED_SIZE              : 283M
+VOLUME_USED_PERCENT           : 1%
+TARGET_LV_DATA_PERCENT        : 5.53%
+TARGET_VGPOOL_DATA_PERCENT    : 4.60%
+VOLUME_EXTRA_TYPE             : STRETCHCLUSTER
+TIEBREAKER_IP                 : [u'10.116.163.254']
+TIEBREAKER_STATUS             : OK
+VOLUME_UUID                   : USX_a96d1148-3617-3b12-a47d-3ef537ea2051
+USE_SHAREDSTORAGE             : NO
+VOLUME_EXPORT_TYPE            : NFS
+VOLUME_EXPORT_STATUS          : RUNNING
+SERVICEIP                     : 10.116.163.12
+SERVICEIP_STATUS              : OK
+VOLUME_SNAPSHOT_STATUS        : Enabled
+VOLUME_SNAPSHOT_EXTRA_SIZE    : 6G
+VOLUME_CACHE_DEVICE_STATUS    : Enabled
+VOLUME_CACHE_DEVICE_SIZE      : 2G
+TOTAL_IBD_NUM                 : 8
+WORKING_IBD_NUM               : 8
+HA_GROUP_UUID                 : USX_6fb6553b-8282-3aa6-b9dc-2acd368ba476
+HA_GROUP_QUORUM               : FAIL
+HA_GROUP_TOTAL_NODE_NUM       : 2
+HA_GROUP_ONLINE_NODE_NUM      : 1
+HA_GROUP_OFFLINE_NODE_NUM     : 1
+HA_GROUP_TOTAL_VOLUME_NUM     : 1
+
+'''
+
+
+import os, sys
+import ConfigParser
+import json
+import logging
+import logging.handlers
+from collections import OrderedDict
+
+sys.path.insert(0, "/opt/milio/libs/atlas")
+from log import *
+from atl_util import get_master_amc_ip
+
+sys.path.insert(0, "/opt/milio/atlas/roles/")
+from utils import *
+
+sys.path.insert(0, "/opt/milio/atlas/roles/ha")
+from ha_util import *
+
+TARGET_LV = 'ibd-target-lv'
+TARGET_VGPOOL = 'ibd-target-vgpool'
+RELEASE_VERSION_FILE = '/etc/ilio/release-version'
+
+LOG_FILENAME = '/var/log/usx-volume-health-status.log'
+set_log_file(LOG_FILENAME)
+atl_logger = logging.getLogger(__name__)
+atl_logger.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(asctime)s %(message)s')
+handler   = logging.handlers.RotatingFileHandler(LOG_FILENAME, maxBytes=10*1024*1024, backupCount=4)
+handler.setFormatter(formatter)
+atl_logger.addHandler(handler)
+
+
+class UsxNodeInfoCollector(object):
+    """
+    class for local usx node info collector
+    """
+    usx_conf = UsxConfig()
+
+    __basic_info_dict = OrderedDict(
+#        node_name                  = '',
+#        ha_status                  = '',
+#        role                       = '',
+#        node_uptime                = '',
+#        usxm_status                = '',
+#        volume_name                = '',
+#        volume_type                = '',
+#        volume_extra_type          = '',
+#       *tiebreaker_ip              = '',
+#       *tiebreaker_status          = '',
+#        volume_uuid                = '',
+#        volume_mount_point         = '',
+#        volume_export_type         = '',
+#        volume_size                = '',
+#        serviceip                  = '',
+#        serviceip_status           = '',
+#        volume_snapshot_status     = '',
+#        volume_snapshot_extra_size = '',
+#        volume_cache_device_status = '',
+#        volume_cache_device_size   = ''
+
+#        share_ip           = '',
+#        share_ip_status    = '',
+#        ibd_status         = '',
+#        total_ibd_num      = '',
+#        working_ibd_num    = '',
+#        raid_type          = '',
+#        raid_status        = '',
+#        lvs_status         = '',
+#        deduplv_size       = '',
+#        deduplv_datap      = '',
+#        dedup_mount_status = '',
+#        dedup_total_size   = '',
+#        dedup_used_size    = '',
+#        volume_uptime      = '',
+#        ha_total_node      = '',
+#        ha_total_volume    = '',
+#        crm_mon_result     = '',
+#        corosync_result    = '',
+#        usx_manager_status = ''
+    )
+
+    __advance_info_dict = OrderedDict(
+
+    )
+
+    __advance_ha_info_dict = OrderedDict(
+
+    )
+
+
+    def __init__(self, full_check_flag):
+        self.__full_check_flag = full_check_flag
+        self.__collect_info()
+    #    self.report()
+
+
+    # Basic methods
+    def __output(self, *args):
+        print("".join([str(x) for x in args]))
+
+
+    def __debug(self, *args):
+        atl_logger.debug("".join([str(x) for x in args]))
+
+
+    # The sole outward interface
+    def report(self):
+        info_list = [self.__basic_info_dict]
+        if self.__full_check_flag:
+            info_list.append(self.__advance_info_dict)
+
+        for info_dict in info_list:
+            for k in info_dict:
+                value = info_dict[k]
+                if value != None:
+                    if type(value) == list:
+                        value = ''.join([str(x)+' ' for x in value])
+                    self.__output("{key}: {value}".format(key=k.upper().ljust(30),value=value))
+
+
+    # Private methods to collect info
+    def __collect_info(self):
+        self.__collect_node_info()
+        self.__collect_volume_info()
+        self.__collect_ha_info()
+
+
+    def __collect_node_info(self):
+        self.__basic_info_dict['node_name'] = milio_config.node_name
+        self.__basic_info_dict['node_uuid'] = get_volume_info()[2]
+        self.__basic_info_dict['ha_status'] = milio_config.is_ha
+        self.__basic_info_dict['role'] = self.__get_role()
+        self.__basic_info_dict['node_uptime'] = self.__get_uptime()
+        self.__basic_info_dict['usx_manager_ip'] = get_master_amc_ip()
+        self.__basic_info_dict['usx_manager_status'] = 'OK' if is_usxmanager_alive() else 'FAIL'
+        self.__basic_info_dict['is_starting_volume_now'] = 'YES' if ha_check_volume_is_starting() else 'NO'
+        self.__basic_info_dict['current_release_version'], self.__basic_info_dict['is_upgraded'], \
+                self.__basic_info_dict['previous_release_version'] = self.__get_release_version()
+        if is_hyperscale():
+            self.__basic_info_dict['is_hyperscale'] = 'YES'
+        elif self.__basic_info_dict['is_upgraded'] == 'YES':
+            self.__basic_info_dict['is_hyperscale'] = 'NO(Or upgraded from version before HS-339)'
+        else:
+            self.__basic_info_dict['is_hyperscale'] = 'NO'
+        self.__basic_info_dict['usx_daemon_version'] = usx_daemon_version()
+
+
+    def __collect_volume_info(self):
+        if milio_config.is_contains_volume:
+            self.__basic_info_dict['volume_name'] = milio_config._volume_server_name
+            self.__basic_info_dict['volume_type'] = milio_config._volume_type
+            self.__basic_info_dict['volume_mount_point'] = milio_config._dedup_mount_point
+            self.__basic_info_dict['volume_size'] = self.__format_size(milio_config.volume_size)
+            (self.__basic_info_dict['volume_used_size'], self.__basic_info_dict['volume_used_percent']) \
+                    = self.__get_volume_used_size_and_percent()
+            (self.__basic_info_dict['target_lv_data_percent'], self.__basic_info_dict['target_vgpool_data_percent']) \
+                    = self.__get_lv_data_percent()
+            if milio_config._is_raid1_volume:
+                self.__basic_info_dict['volume_extra_type'] = 'ROBO'
+            if milio_config._is_stretchcluster_volume:
+                self.__basic_info_dict['volume_extra_type'] += ' STRETCHCLUSTER' \
+                        if 'volume_extra_type' in self.__basic_info_dict \
+                        else 'STRETCHCLUSTER'
+                self.__basic_info_dict['tiebreaker_ip'] = ha_get_tiebreakerip()
+                self.__basic_info_dict['tiebreaker_status'] = ['FAIL', 'OK'][ha_check_tiebreaker()]
+            if 'volume_extra_type' not in self.__basic_info_dict:
+                self.__basic_info_dict['volume_extra_type'] = 'NORMAL'
+            self.__basic_info_dict['volume_uuid'] = milio_config._volume_uuid
+            self.__basic_info_dict['use_sharedstorage'] = 'YES' if milio_config.is_sharedstorage_volume else 'NO'
+            self.__basic_info_dict['volume_export_type'] = milio_config.export_type
+            self.__basic_info_dict['volume_export_status'] = self.__get_expoort_service_status()
+            if 'SIMPLE' not in self.__basic_info_dict['volume_type']:
+                self.__basic_info_dict['serviceip'] = milio_config.serviceip
+                self.__basic_info_dict['serviceip_status'] = self.__get_serviceip_status()
+            self.__basic_info_dict['volume_snapshot_status'] = ['Disabled', 'Enabled'][milio_config.is_snapshotenabled]
+            if milio_config.is_snapshotenabled:
+                self.__basic_info_dict['volume_snapshot_extra_size'] = self.__format_size(milio_config.snapshot_space)
+            self.__basic_info_dict['volume_cache_device_status'] = ['Disabled', 'Enabled'][milio_config.is_fastfailover]
+            if milio_config.is_fastfailover:
+                self.__basic_info_dict['volume_cache_device_size'] = self.__format_size(milio_config.wc_size)
+#            self.__basic_info_dict['raid_status'] = self.__get_raid_status()
+            self.__basic_info_dict['total_ibd_num'] = len(IBDManager().find_ibd_status("all", True)[0])
+            self.__basic_info_dict['working_ibd_num'] = len(IBDManager().find_ibd_status("alevel:read write", True)[0])
+
+
+    def __collect_ha_info(self):
+        if self.__basic_info_dict['ha_status']:
+            self.__basic_info_dict['ha_modules_version'] = ha_modules_version()
+            self.__basic_info_dict['ha_group_uuid'] = get_ha_uuid()
+            self.__basic_info_dict['ha_group_quorum'] = 'OK' if ha_has_quorum() else 'FAIL'
+            # Insert total num first to get better output
+            self.__basic_info_dict['ha_group_total_node_num'] = 0
+            self.__basic_info_dict['ha_group_online_node_num'] = len(ha_get_online_node_list())
+            self.__basic_info_dict['ha_group_offline_node_num'] = len(ha_get_offline_node_list())
+            self.__basic_info_dict['ha_group_total_node_num'] = self.__basic_info_dict['ha_group_online_node_num'] \
+                    + self.__basic_info_dict['ha_group_offline_node_num']
+            self.__basic_info_dict['ha_group_total_volume_num'] = len(ha_get_volume_list())
+
+
+    def __format_size(self, data):
+        return '{}G'.format(data)
+
+
+    def __format_percent(self, data):
+        return '{}%'.format(data)
+
+
+    def __get_uptime(self):
+        (rc, msg) = ha_retry_cmd("uptime", 1, 1)
+        if len(msg) > 0:
+            uptime = msg[0].lstrip()
+        else:
+            uptime = 'unknown'
+        return uptime
+
+
+    def __get_role(self):
+        if not milio_config._is_role_volume():
+            return 'SVM'
+        elif milio_config.is_contains_volume:
+            return 'RESOURCE_CONTAINER'
+        elif milio_config.is_ha:
+            return 'HA_VM'
+        else:
+            return 'EMPTY_CONTAINER_WITUOUT_HA'
+
+
+    def __get_serviceip_status(self):
+        cmd = 'ip addr show | grep "global secondary" | grep {}'.format(self.__basic_info_dict['serviceip'])
+        (rc, msg) = ha_retry_cmd(cmd, 1, 1)
+        return ['FAIL', 'OK'][len(msg) > 0]
+
+
+    def __get_volume_used_size_and_percent(self):
+        cmd = 'df -kh | grep {}'.format(self.__basic_info_dict['volume_mount_point'])
+        (rc, msg) = ha_retry_cmd(cmd, 1, 1)
+        if rc == 0 and len(msg) > 0:
+            return (msg[0].split()[2], msg[0].split()[4])
+        else:
+            return ('UNKNOWN', 'UNKNOWN')
+
+
+    def __get_lv_data_percent(self):
+        cmd = 'lvs'
+        (rc, msg) = ha_retry_cmd(cmd, 1, 1)
+        vgpool_data_percent = 'UNKNOWN'
+        lv_data_percent = 'UNKNOWN'
+        if rc == 0 and len(msg) > 0:
+            for line in msg:
+                words = line.split()
+                if TARGET_VGPOOL in words[0]:
+                    vgpool_data_percent = self.__format_percent(words[-1])
+                elif TARGET_LV in words[0]:
+                    lv_data_percent = self.__format_percent(words[-1])
+        return (lv_data_percent, vgpool_data_percent)
+
+
+    def __get_expoort_service_status(self):
+        service = {
+                'NFS' : 'nfs-kernel-server',
+                'iSCSI' : 'scst'
+                }
+        if self.__basic_info_dict['volume_export_type'] in service:
+            cmd = 'service {} status'.format(service[self.__basic_info_dict['volume_export_type']])
+            (rc,msg) = ha_retry_cmd(cmd, 1, 1)
+            if len(msg) > 0:
+                if 'running' in msg[0]:
+                    if 'NOT' in msg[0]:
+                        return 'NOT RUNNING'
+                    return 'RUNNING'
+        else:
+            return 'UNKNOWN'
+
+
+    def __get_release_version(self):
+        with open(RELEASE_VERSION_FILE, 'r') as fd:
+            versions = [ i.strip('\n') for i in fd.readlines() ]
+            return (versions[-1], 'YES', versions[:-1]) if len(versions) > 1 else (versions[0], 'NO', None)
+
+
+# Main
+if __name__ == '__main__':
+
+    # check argvs
+    if not ((len(sys.argv) == 1) or (len(sys.argv) == 2 and sys.argv[1] == '-v')):
+        debug("USAGE: python %s [-v]" % os.path.basename(__file__))
+        sys.exit(1)
+
+    if len(sys.argv) == 3:
+        flag = True
+    else:
+        flag = False
+
+    this_node = UsxNodeInfoCollector(flag)
+    this_node.report()

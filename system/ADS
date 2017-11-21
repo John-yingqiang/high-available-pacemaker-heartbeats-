@@ -1,0 +1,305 @@
+#!/bin/sh
+#
+# 
+# ADS 
+#
+# Description:	Manages an ADS volume as an HA resource
+#
+#
+# Author:	Jin Lv
+# License:	GNU General Public License (GPL)
+# Copyright:	(C) 2013 Atlantis Computing Inc.
+#
+#	This code significantly inspired by the LVM resource
+#	in FailSafe by Lars Marowsky-Bree
+#
+#
+# An example usage in /etc/ha.d/haresources: 
+#       node1  10.0.0.170 ServeRAID::1::1 ADS::myvolname
+#
+# See usage() function below for more details...
+#
+#	  OCF parameters are as below:
+#		OCF_RESKEY_adsname
+#		
+#######################################################################
+# Initialization:
+
+: ${OCF_FUNCTIONS_DIR=${OCF_ROOT}/lib/heartbeat}
+. ${OCF_FUNCTIONS_DIR}/ocf-shellfuncs
+
+#######################################################################
+
+
+usage() {
+  methods=`ADS_methods`
+  methods=`echo $methods | tr ' ' '|'`
+  cat <<-!
+	usage: $0 $methods
+
+	$0 manages an  Atlas Application Defined Storage (ADS) as an HA resource
+
+	The 'start' operation brings the given ads online
+	The 'stop' operation takes the given ads offline
+	The 'status' operation reports whether the ads is available
+	The 'monitor' operation reports whether the ads seems present
+	The 'validate-all' operation checks whether the OCF parameters are valid
+	The 'methods' operation reports on the methods $0 supports
+
+	!
+}
+
+meta_data() {
+	cat <<END
+<?xml version="1.0"?>
+<!DOCTYPE resource-agent SYSTEM "ra-api-1.dtd">
+<resource-agent name="ADS">
+<version>1.0</version>
+
+<longdesc lang="en">
+Resource script for ADS. It manages an Atlas Application Defined Storage (ADS) 
+as an HA resource. 
+</longdesc>
+<shortdesc lang="en">Controls the availability of an ADS Volume Group</shortdesc>
+
+<parameters>
+<parameter name="adsname" unique="0" required="1">
+<longdesc lang="en">
+The name of ADS.
+</longdesc>
+<shortdesc lang="en">ADS name</shortdesc>
+<content type="string" default="" />
+</parameter>
+
+<parameter name="resourceJson" unique="0" required="0">
+<longdesc lang="en">
+The json of resource info.
+</longdesc>
+<shortdesc lang="en">Resource JSON info</shortdesc>
+<content type="string" default="" />
+</parameter>
+
+<parameter name="raidJson" unique="0" required="0">
+<longdesc lang="en">
+The json of raid info.
+</longdesc>
+<shortdesc lang="en">Raid JSON info</shortdesc>
+<content type="string" default="" />
+</parameter>
+
+<parameter name="raid1PrimaryInfoJson" unique="0" required="0">
+<longdesc lang="en">
+The json of primary property for both nodes in each raid 1
+</longdesc>
+<shortdesc lang="en">Raid1 Primary Info Json</shortdesc>
+<content type="string" default="" />
+</parameter>
+
+</parameters>
+
+<actions>
+<action name="start" timeout="30" />
+<action name="stop" timeout="30" />
+<action name="status" timeout="30" />
+<action name="monitor" depth="0" timeout="30" interval="10" />
+<action name="methods" timeout="5" />
+<action name="meta-data" timeout="5" />
+<action name="validate-all" timeout="5" />
+</actions>
+</resource-agent>
+END
+}
+
+#
+# methods: What methods/operations do we support?
+#
+ADS_methods() {
+  cat <<-!
+	start
+	stop
+	status
+	monitor
+	methods
+	validate-all
+	usage
+	!
+}
+
+#
+#	Return ADS status (silently)
+#
+ADS_status() {
+  	ocf_run $ADS_LOAD status $1 
+	rc=$?
+	return $rc
+}
+
+#
+#	Report on ADS volume status to stdout...
+#
+ADS_report_status() {
+
+	ADS_status $1
+	return $?
+}
+
+#
+#	Monitor the volume - does it really seem to be working?
+#
+#
+ADS_monitor() {
+  if
+    ADS_status $1
+  then
+    : OK
+    return $OCF_SUCCESS 
+  else
+    ocf_log info "ADS Volume $1 is offline"
+    return $OCF_NOT_RUNNING
+  fi
+
+  return $OCF_SUCCESS 
+}
+
+#
+#	Enable ADS volume
+#
+ADS_start() {
+
+  ocf_log info "Activating ADS $1"
+
+  ocf_run $ADS_LOAD ha $1
+
+  if [ $? -ne 0 ]; then
+      ocf_log err "ADS $1 underlying storage initialize failed!"
+  fi
+
+  if ADS_status $1; then
+      return $OCF_SUCCESS
+  fi
+
+  return $OCF_ERR_GENERIC
+}
+
+#
+#	Disable the ADS volume
+#
+ADS_stop() {
+
+  ocf_log info "Not stop ADS $1"
+  return $OCF_ERR_GENERIC
+  
+  if [ -f "/tmp/ha_disable" ]; then
+	return $OCF_SUCCESS
+  fi
+
+  ocf_log info "Deactivating ADS $1"
+
+  ocf_run $ADS_STOP stop $1 
+
+  if [ $? -ne 0 ]; then
+	ocf_log err "ADS [$VOLUME] underlying storage stop failed!"
+	return $OCF_ERR_GENERIC
+  fi
+
+  if
+    ADS_status $1
+  then
+    ocf_log err "ADS: $1 did not stop correctly"
+    return $OCF_ERR_GENERIC 
+  fi
+
+
+  return $OCF_SUCCESS
+}
+
+#
+#	Check whether the OCF instance parameters are valid
+#
+ADS_validate_all() {
+
+  return $OCF_SUCCESS
+}
+#
+#	'main' starts here...
+#
+
+# Locate the real ads work horse, Prefer .py file
+ADS_LOAD="/opt/milio/atlas/roles/virtvol/vv-load.py"
+ADS_STOP="/opt/milio/atlas/roles/virtvol/vv-load.py"
+if [ ! -e $ADS_LOAD ]
+then
+	ADS_LOAD=${ADS_LOAD}c
+	if [ ! -e $ADS_LOAD ]
+	then
+		ocf_log err "Cannot find vv-load.py[c]"
+		exit $OCF_ERR_ARGS
+	else
+		ADS_LOAD="python $ADS_LOAD"
+	fi
+fi
+if [ ! -e $ADS_STOP ]
+then
+	ADS_STOP=${ADS_STOP}c
+	if [ ! -e $ADS_STOP ]
+	then
+		ocf_log err "Cannot find vv-stop.py[c]"
+		exit $OCF_ERR_ARGS
+	else
+		ADS_STOP="python $ADS_STOP"
+	fi
+fi
+
+
+if
+  [ $# -ne 1 ]
+then
+  usage
+  exit $OCF_ERR_ARGS 
+fi
+
+case $1 in
+  meta-data)	meta_data
+		exit $OCF_SUCCESS;;
+
+  methods)	ADS_methods
+		exit $?;;
+
+  usage)	usage
+		exit $OCF_SUCCESS;;
+  *)		;;
+esac
+
+if 
+  [ -z "$OCF_RESKEY_adsname" ]
+then
+#  echo "You must identify the ADS name!"
+  ocf_log err "You must identify the ADS name!"
+#  usage
+  exit $OCF_ERR_CONFIGURED 
+fi
+
+
+VOLUME=$OCF_RESKEY_adsname
+
+# What kind of method was invoked?
+case "$1" in
+
+  start)	ADS_start $VOLUME
+		exit $?;;
+
+  stop)		ADS_stop $VOLUME
+		exit $?;;
+
+  status)	ADS_report_status $VOLUME
+		exit $?;;
+
+  monitor)	ADS_monitor $VOLUME
+		exit $?;;
+
+  validate-all)	ADS_validate_all
+		;;
+
+  *)		usage
+		exit $OCF_ERR_UNIMPLEMENTED;;
+esac

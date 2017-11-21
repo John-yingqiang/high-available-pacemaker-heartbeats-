@@ -1,0 +1,214 @@
+USX-Related Info in the USX ILIO OVF
+=====================================================
+Version 0.2, 17-Jan-2014 : Initial draft
+Version 0.3, 24-Jan-2014 : Added info on system config files changed at build/first-boot of ILIO/AMC
+
+
+DEDUP MOUNT OPTIONS AND FORMAT SYNTAX
+------------------------------------------
+1. Guaranteed write mode
+   1.1 lazy reconstruct - "rw,noblocktable,noatime,nodiratime,timeout=180000,dedupzeros,commit=1,noblocktable,delayed_reconstruct,data=ordered,errors=remount-ro,journaled"
+
+   1.2 force reconstruct - "rw,noblocktable,noatime,nodiratime,timeout=180000,dedupzeros,commit=1,noblocktable,force_reconstruct,data=ordered,errors=remount-ro,journaled"
+
+   1.3 normal reconstruct - "rw,noblocktable,noatime,nodiratime,timeout=180000,dedupzeros,commit=1,noblocktable,reconstruct,data=ordered,errors=remount-ro,journaled"
+
+   1.4 Thin reconstruct - "rw,noblocktable,noatime,nodiratime,timeout=180000,dedupzeros,commit=1,noblocktable,thin_reconstruct,data=ordered,errors=remount-ro,journaled"
+
+2. Regular mode -
+   2.1 lazy reconstruct - "rw,noblocktable,noatime,nodiratime,timeout=180000,dedupzeros,commit=1,noblocktable,delayed_reconstruct,data=ordered,errors=remount-ro"
+
+   2.2 force reconstruct - "rw,noblocktable,noatime,nodiratime,timeout=180000,dedupzeros,commit=1,noblocktable,force_reconstruct,data=ordered,errors=remount-ro"
+
+   2.3 normal reconstruct - "rw,noblocktable,noatime,nodiratime,timeout=180000,dedupzeros,commit=1,noblocktable,reconstruct,data=ordered,errors=remount-ro"
+
+   2.4 thin reconstruct - "rw,noblocktable,noatime,nodiratime,timeout=180000,dedupzeros,commit=1,noblocktable,thin_reconstruct,data=ordered,errors=remount-ro"
+
+3. Mke2fs - /opt/milio/bin/mke2fs -N 100000 -b 4096 -d -j -J size=400
+ 
+4. Dedup-vScaler interaction and device configuration: 
+   /etc/ilio/mnttab serves as an override mechanism for mount and vscaler load operations.
+   Using /etc/ilio/mnttab gives better control for Support/SE/Engg if they want to manually change one or more mount options or devices.
+
+   The mnttab has default values populated during one time ads node configuration.
+   Dedup and vscaler also rely on mnttab to find their devices *if* device names get changed during failover.
+ 
+   On system reboot, the file mnttab is parsed by HA resource scripts or ddp_setup.pyc (in case of a non-HA environment). 
+
+   If an administrator changes this file then mount options are read from this file instead of default options.
+
+   The format of the /etc/ilio/mnttab file is as follows with '}}##0##{{' as separator.
+
+   dedup_dev}}##0##{{cache_dev}}##0##{{cache_name}}##0##{{mount_point}}##0##{{mount_options
+
+   E.g.:
+
+   /dev/sdb1}}##0##{{/dev/ssd1}}##0##{{vmdata_cache}}##0##{{/exports/ILIO_VirtualDesktops/}}##0##{{rw,noblocktable,thin_reconstruct,data=ordered,errors=remount-ro
+
+
+
+PV, VG and LV CREATION COMMANDS
+---------------------------------
+1.      Sample to run pvcreate
+   /sbin/pvcreate -ff -y  /dev/md3p1 /dev/disk/by-path/pci-0000:03:00.0-scsi-0:0:1:0-part1
+
+
+2.     Sample to run vgcreate
+   /sbin/vgcreate test1_wy-cap-pool-37 /dev/md3p1 /dev/disk/by-path/pci-0000:03:00.0-scsi-0:0:1:0-part1
+
+
+3.     Sample to run lvcreate
+   /sbin/lvcreate -n atlas_internal_lv -L 1M test1_wy-cap-pool-37
+
+
+
+MDADM COMMANDS
+---------------------
+1.     Sample to create raid5
+   /sbin/mdadm --create --assume-clean --chunk=512 --run --force --metadata=1.2 /dev/md0 -N atlas-md-0 --level=raid1 --raid-devices=2 /dev/nbd0p1 /dev/nbd1p1
+
+
+2..     Sample to assemble
+   /sbin/mdadm --assemble /dev/md0 /dev/nbd5p1 /dev/nbd3p1
+
+
+
+PARTITIONING A BLOCK DEVICE (used in creating RAIDs/Logical Volumes)
+-----------------------------------------------------------------------------
+1.     Sample to parted
+   /sbin/parted -s -- /dev/disk/by-path/pci-0000:03:00.0-scsi-0:0:1:0 mklabel gpt mkpart primary 2048s -1 set 1 raid on
+
+
+
+NBD SERVER AND CLIENT
+----------------------------
+1.     Sample to stat a nbd-clinet:
+   /sbin/nbd-client -p -t 5 -N test1_tony-test-104-agg-4_DISK_nbd  -x "python /opt/milio/atlas/roles/pool/cp-load.pyc readd test1_tony-test-151-cap-pool test1_tony-test-104-agg-4_DISK_nbd" 10.15.108.104 /dev/nbd4
+
+2.     Sample of nbd-server.conf
+    ------- BEGIN SAMPLE NBD SERVER CONFIG (CONFIG DOES NOT INCLUDE THIS LINE) -----
+    [generic]
+
+ 
+
+    [atlas_internal_lv]
+
+    exportname = /dev/test1_tony-test-151-cap-pool/atlas_internal_lv
+
+    sync = true
+    ------- END SAMPLE NBD SERVER CONFIG (CONFIG DOES NOT INCLUDE THIS LINE) -----
+
+   Note that if you want an async nbd device, leave out the "sync = true" line in the sample config file above
+
+
+
+HA-RELATED CONFIG FILES
+--------------------------------
+The corosync configuration file is at /etc/corosync/corosync.conf
+
+The live configuration of pacemaker resources can be viewed by running the command “crm configure show”
+
+If the pacemaker and corosync are not running, the last resource configuration can be found at /var/lib/heartbeat/crm/cib.xml
+
+We use some open source resource agents, such as “ocf:heartbeat:IPaddr”, “ocf:heartbeat:nfsserver”, all resource agents (including the ones written/modified by us); these are located at /usr/lib/ocf/resource.d/heartbeat/
+
+
+
+OTHER USX RELATED CONFIG FILES AND DATA/LOGS
+---------------------------------------------------
+1. /etc/ilio/atlas.json
+   This file is set as a vApp property in the ILIO by AMC during deployment of the ILIO. It contains various config parameters for the ILIO such as the role, whether HA is enabled, the ILIO UUID and other things.
+   This file is parsed by the bootstrap and the roles scripts in /opt/milio/atlas
+
+2. SCST SCSI configuration
+   /etc/scst.conf
+   This file is written by the role scripts to export a device as a SCSI target
+
+3. USX Log files - There are the log files of interest on each ILIO. These files are also sent to the AMC server using rsyslog, and will be present in the directory /var/rsyslog/nodes/<ILIO_NAME> for each ILIO.
+
+   - /var/log/bootstrap.log - This log file contains bootstrap information. Bootstrap is the script called to properly configure/start an ILIO. It in turn calls the relevant role pack scripts for that ILIO as specified in /etc/ilio/atlas.json
+
+   - /var/log/agstart.log - This log file is present on an Aggregator Node and contains messages from the config/startup of the Agg Node as performed by the Aggregator Node role pack script.
+
+   - /var/log/ads-pool.log - This log file logs messages from the ADS and Pool Node role scripts.
+
+   - /var/log/usx-milio-atlas.log - This file logs messages from the USX milio common library functions
+
+   - /var/log/usx-milio.log - This file logs messages from the USX milio common library functions not logged in /var/log/usx-milio-atlas.log. This log file will be deprecated in a future release, and all USX common library log messages will appear in /var/log/usx-milio-atlas.log
+
+   - /var/log/diamond/diamond.log - Logs for the Diamond metrics collector scripts
+
+   - /var/log/corosync.log - Logs for the Corosync component of HA
+
+   - /var/log/atlas-ha.log - Logs for HA corosync/pacemaker configuration status
+
+   - /var/log/syslog - Contains HA resrouce logs as well as other system logs
+
+   - /var/log/kern.log - Kernel log messages
+
+4. Configuration marker file:
+   /usr/share/ilio/configured - The presence of this file indicates that the ILIO has already been configured with the data in the vApp properties and the JSON file.
+   The boostrap script checks for this file on ILIO startup.
+   If this file does not exist, it indicates that this is a freshly-deployed ILIO and thus needs to have the initial configuration performed for this ILIO to function as a USX ILIO. It configures the ILIO with the IP, hostname and other details as injected into the ILIO's vApp properties, writes the JSON information in the vApp properties to /etc/ilio/atlas.json, and then calls the appropriate role pack script in "configure" mode so that the role pack script knows that it needs to perform any additional configuration needed for that specific role.
+   If this file exists, then bootstrap knows that the initial configuration/setup has already been done for this ILIO, and calls the appropriate role script in "start" mode
+   To reconfigure an already-configured ILIO (for instance if you change some vApp property of the ILIO), simply delete this file and reboot the ILIO.
+   Note that if you manually change the vApp properties of an ILIO, you need to make the changes while the ILIO is powered off.
+
+5. System configuration files : files in /opt/milio/atlas/system
+   Some system configuration files are changed during the ILIO build. The location of these files is the directory /opt/milio/atlas/system/
+   Inside that directory is a README file which specifies the final location where each file inside /opt/milio/atlas/system gets copied into the ILIO.
+
+
+AMC RELATED INFO
+-----------------------------------------------------
+
+Config files used by AMC components:
+
+1. On AMC OVF:
+
+  - Server
+    /opt/amc/server/config/amc-config.yml
+    /opt/amc/server/config/amc-grid.xml
+
+  - Graphite (metrics)
+    /opt/graphite/
+
+  - Nginx (Web server)
+    /opt/nginx/
+
+  - rSyslog
+    /etc/rsyslog.conf
+    /etc/rsyslog.d/50-default.conf
+
+ 
+
+2. ILIO OVF:
+
+  - Agent (provides grid functionality and ILIO-internal REST API)
+    /opt/amc/agent/config/amc-config.yml
+    /opt/amc/agent/config/amc-grid.xml
+
+  - Diamond (metrics)
+    /etc/diamond
+
+  - rSyslog
+    /etc/rsyslog.conf
+    /etc/rsyslog.d/50-default.conf
+
+  - Log rotation of all relevant logs
+    /etc/logrotate.d/all
+
+
+3. Configuration marker file in AMC OVF:
+   /opt/amc/configured - The presence of this file indicates that the AMC has already been configured with the correct data required for proper startup.
+   The cfgAMC.py script checks for this file on AMC startup.
+   If this file does not exist, it indicates that this is a freshly-deployed AMC and thus needs to have the initial configuration performed to function as a USX AMC. It then performs the required configuration (Reading the OVF vApp properties and setting network interface details, hostname, timezone etc and setting AMC services to automatically startup), creates this file and then reboots the AMC.
+   If this file exists, then cfgAMC.py knows that the initial configuration/setup has already been done for this AMC, and proceeds to start the AMC services.
+   To reconfigure an already-configured AMC (for instance if you change some vApp property of the AMC), simply delete this file and reboot the AMC.
+   Note that if you manually change the vApp properties of an AMC, you need to make the changes while the AMC is powered off.
+
+4. System configuration files AMC OVF: files in /opt/amc/startup/system/
+   Some system configuration files are changed during the first boot of the AMC. The location of these files is the directory /opt/amc/startup/system/
+   Inside that directory is a README file which specifies the final location where each file inside /opt/amc/startup/system gets copied into the ILIO.
+
+
